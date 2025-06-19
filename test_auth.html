@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <title>Autenticação Facial</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      color: white;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    video, canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+    }
+
+    #overlay {
+      border: 3px solid lime;
+      border-radius: 50%;
+      position: absolute;
+      top: 20%;
+      left: 25%;
+      width: 50vw;
+      height: 50vw;
+      pointer-events: none;
+    }
+
+    #status {
+      position: fixed;
+      bottom: 20px;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="overlay"></div>
+  <div id="status">Ajuste seu rosto no oval</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const statusEl = document.getElementById('status');
+    let headMovedUp = false;
+    let baseY = null;
+
+    async function initCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      video.srcObject = stream;
+    }
+
+    function captureAndSend(imageDataUrl) {
+      statusEl.innerText = 'Verificando...';
+
+      fetch('http://18.230.233.201:8000/api/v1/recognition/recognize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': '4362df74-a5e7-4f61-83b6-96ba8615f01e'
+        },
+        body: JSON.stringify({ image_base64: imageDataUrl.replace(/^data:image\/(png|jpeg);base64,/, '') })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.result.length > 0) {
+          statusEl.innerText = 'Usuário reconhecido: ' + data.result[0].subject;
+        } else {
+          statusEl.innerText = 'Rosto não reconhecido.';
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        statusEl.innerText = 'Erro ao verificar.';
+      });
+    }
+
+    const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.6 });
+    faceMesh.onResults(results => {
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const landmarks = results.multiFaceLandmarks[0];
+      const nose = landmarks[1]; // ponto da ponta do nariz
+      const y = nose.y;
+
+      if (baseY === null) {
+        baseY = y;
+        statusEl.innerText = 'Mova o rosto para cima';
+      } else if (!headMovedUp && y < baseY - 0.03) {
+        headMovedUp = true;
+        statusEl.innerText = 'Movimento detectado, capturando imagem...';
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = video.videoWidth;
+        tempCanvas.height = video.videoHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+        const imageData = tempCanvas.toDataURL('image/jpeg');
+
+        captureAndSend(imageData);
+      }
+    });
+
+    initCamera().then(() => {
+      const camera = new Camera(video, {
+        onFrame: async () => {
+          await faceMesh.send({ image: video });
+        },
+        width: 640,
+        height: 480
+      });
+      camera.start();
+    });
+  </script>
+</body>
+</html>
